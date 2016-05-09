@@ -50,6 +50,7 @@ batchsize = 1000
 ITER_NUM = 20
 PRINT_TIME_BATCH_NUM = 100
 BLOCK_SIZE = 100000
+
 #函数定义---------------------------------------------------------------
 #cuda 清除context
 def _finish_up():
@@ -64,6 +65,10 @@ def _finish_up():
 
 #进程0--------------------------------------------------------------------
 if rank==0:
+	#变量定义
+	batch_count = 0
+	w1_state = 0	#worker状态,0 表示worker此次迭代没有训练完，1 表示完成
+	w2_state = 0
 	sys.setrecursionlimit(1000000)
 	#初始化，读取训练集
 	readMaxGroup = ReadMaxGroup()
@@ -83,25 +88,28 @@ if rank==0:
 	paras_instance=paras(readMaxGroup.input_groupid,lookup_table,pattern_groupid_list)
 
 	#------------------------ITER_NUM次迭代------------------------
-	for j in range(ITER_NUM):
+	for itert in range(ITER_NUM):
 		#向worker1和worker2发送初始参数
 		comm.send(paras_instance, dest = P1)
 		comm.send(paras_instance, dest = P2)
 		paras_instance.lookup_table = None
-		#计算mini-batch个数
-		batch_num = readMaxGroup.total_instance_num/batchsize
-		if readMaxGroup.total_instance_num % batchsize !=0:
-			batch_num += 1
-		#针对每个batch，进行训练
-		for itert in range(batch_num):
+
+		#针对每个batch，进行训练，一直接收worker返回的delta并更新参数
+		while(w1_state == 0 or w2_state == 0):
 			#每训练PRINT_TIME_BATCH_NUM次，打印用时
-			if itert % PRINT_TIME_BATCH_NUM ==0:
+			if batch_count % PRINT_TIME_BATCH_NUM == 0:
 				print 'iter %d, complete mini-batchs:%d, take time %s' % (j, itert, time.time()-start_time)
 			#判断传回参数的worker，并回传修改过的参数
 			status = MPI.Status()
 			delta = comm.recv(source = MPI.ANY_SOURCE, tag = MPI.ANY_TAG, status=status)
 			recv_rank = status.Get_source()
 			#更新参数
+			if recv_rank == P1:
+				w1_state = delta['worker_state']
+			else:
+				w2_state = delta['worker_state']
+			if w1_state == 1 and w2_state == 1:	#一次迭代完成
+				break
 			paras_instance.vs = paras_instance.vs - delta['vs_delta']
 			paras_instance.theta1 = paras_instance.theta1 + delta['theta1_delta']
 			paras_instance.theta2 = paras_instance.theta2 + delta['theta2_delta']
@@ -121,22 +129,19 @@ if rank==0:
 					offset = lookup_table.groupid_offset[groupid]
 					#print batchsize    
 					pos = lookup_table.QueryPos(groupid,featureid)
-					lookup_table.central_array[pos:pos+vec_length] -= \
-						paras_instance.alpha * delta['delta_x_value'][i][offset:offset+vec_length]
+					lookup_table.central_array[pos:pos+vec_length] -= paras_instance.alpha * delta['delta_x_value'][i][offset:offset+vec_length]
 					partOfTable[i][offset:offset+vec_length] = lookup_table.central_array[pos:pos+vec_length]
 					count += 1
 			paras_instance.partOfTable = partOfTable
 			#回传修改过的参数
 			comm.send(paras_instance, dest = recv_rank)
-		#保证传递次数的
-		status = MPI.Status()
-		delta = comm.recv(source = MPI.ANY_SOURCE, tag = MPI.ANY_TAG, status=status)
-		recv_rank = status.Get_source()
-		comm.send(paras_instance, dest = recv_rank)
+			#记录mini-batch个数
+			batch_count += 1
+
 		paras_instance.lookup_table = lookup_table
 		print 'P0 completes one iter'
 		comm.send(readMaxGroup, dest=P1)
-	print 'P0 complete'
+	print 'P0 completes'
 else:
 	#-----------------------choice of GPU--------------------
 	cuda.init()
@@ -144,28 +149,34 @@ else:
 	context = device.make_context()
 	#--------变量初始化-----------
 	origin_batchsize = batchsize
-	iteration = 0
+	delta_paras = {}
 	sum_time = 0
 	cnn = CNN()
 	#----------------------worker runs...----------------------------------
-	while iteration < ITER_NUM:
-		#每次迭代前应初始的变量
+	for iteration in range(ITER_NUM):
+		#----------------每次迭代前应初始的变量---------------------
 		t0 = time.time()
 		block_size = BLOCK_SIZE		#从文件读取样本的最小单位
-		#READ DIFFERENT DISK, 读取worker各自的训练集
+
+		#----------------读取worker各自的训练集--------------------
 		if rank == 1:
 			train_feature_group_list = Train_feature_group_list("/media/new/Data/train1.dat")
 		else:
 			train_feature_group_list = Train_feature_group_list("/media/new/DATA2/train2.dat")
 		train_feature_group_list.input_groupid = 23 ############ this should be general ##############
 		train_feature_group_list.readBlockFile(block_size)
-		trainInstanceNum = 40428966/2########### this should be general ############
+		trainInstanceNum = train_feature_group_list.count_of_file########### this should be general ############
+
 		#计算每个worker数据集，block的个数
 		blocks = trainInstanceNum / block_size
 		if trainInstanceNum % block_size != 0:
 			blocks += 1
 		print "block num", blocks
-		
+
+		#开始之前，初始化CNN参数
+		paras_recv = comm.recv(source = P0)
+		cnn.set_paras(paras_recv)
+
 		for b in range(0,blocks):
 			print "block:%s" % b
 			if b == blocks - 1 and  trainInstanceNum % block_size!=0:
@@ -178,10 +189,7 @@ else:
 				#----------------receive paras, every mini-batch------------------------
 				#print '%d recevice from 0' % rank
 				paras_recv = comm.recv(source = P0)
-				if b == 0 and batch_index == 0:		#第一次初始化所有参数，之后只更新部分参数
-					cnn.set_paras(paras_recv)
-				else:
-					cnn.setPartOfTable(batchsize, list_group_batch, list_feature_batch, paras_recv)
+				cnn.setPartOfTable(batchsize, list_group_batch, list_feature_batch, paras_recv)
 				if batch_index == chunk - 1 and block_size % batchsize != 0:
 					batchsize = block_size % batchsize
 				#---------------------load data and train----------------------------
@@ -190,6 +198,7 @@ else:
 				delta_paras=cnn.train(batchsize, trainx, trainy, list_feature_batch, list_group_batch)
 
 				delta_paras['batchsize'] = batchsize
+				delta_paras['worker_state'] = 0	#worker状态,0 表示worker此次迭代没有训练完，1 表示完成
 				#---------after one mini-batch, send delta to process 0--------------
 				comm.send(delta_paras, dest = P0)
 
@@ -206,8 +215,9 @@ else:
 				continue
 			train_feature_group_list.readBlockFile(block_size)
 		train_feature_group_list.BlockTrainFile.close()
-		comm.recv(source = P0)
-
+		#通知controller，当前worker一次迭代完成
+		delta_paras['worker_state'] = 1
+		comm.send(delta_paras,dest = P0)
 		print 'P%d complete' % rank
 		'''
 		reading test file by blocking,because test file is scalar.
@@ -271,7 +281,6 @@ else:
 			
 			trainloss_file.close()
 			auc_file.close()
-		iteration += 1
 		t1 = time.time()
 		print 'rank %d, this epoch takes time(seconds): %f' % (rank, t1 - t0)
 		sum_time += (t1-t0)
