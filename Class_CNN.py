@@ -132,8 +132,10 @@ class CNN:
 				featureid = instance_fea[groupid_incre]
 				pos = self.lookup_table.QueryPos(groupid,featureid)
 				offset = self.lookup_table.groupid_offset[groupid]
-					
-				trainx[i][offset:offset+vec_length] = trainx[i][offset:offset+vec_length] + self.lookup_table.central_array[pos:pos+vec_length]
+				
+				#added by tangbo at 5.11.2016
+				if pos != -1:
+					trainx[i][offset:offset+vec_length] = trainx[i][offset:offset+vec_length] + self.lookup_table.central_array[pos:pos+vec_length]
 
 		
 		#trainx = gpuarray.to_gpu(trainx)

@@ -20,11 +20,11 @@ class Lookup_table:
 		self.group_offset = {}
 
 		self.groupid_offset = {}
-		maxGroupIndex = max_groupidx
-		for k in maxGroupIndex.keys():
-			if maxGroupIndex[k] == 0:
+		self.maxGroupIndex = max_groupidx
+		for k in self.maxGroupIndex.keys():
+			if self.maxGroupIndex[k] == 0:
 				continue
-			self.total_length += (maxGroupIndex[k]+1)*self.embedding_length
+			self.total_length += (self.maxGroupIndex[k]+1)*self.embedding_length
 
 
 
@@ -41,17 +41,22 @@ class Lookup_table:
 
 		count = 0
 		num = 0
-		for k in maxGroupIndex.keys():
-			if maxGroupIndex[k] == 0:
+		for k in self.maxGroupIndex.keys():
+			if self.maxGroupIndex[k] == 0:
 				continue
 			else:
 				self.group_offset[k] = count * self.embedding_length
 				self.groupid_offset[k] = num * self.embedding_length
-				count += (maxGroupIndex[k]+1)
+				count += (self.maxGroupIndex[k]+1)
 				num += 1
 		print 'init lookupTable finished!'
 	def QueryPos(self,groupid,featureid):
 		offset = self.group_offset[groupid]
 		pos = offset + featureid*self.embedding_length
+
+		#added by tangbo at 5.11.2016,if pos not in correct range,reture -1
+		if pos > offset + self.maxGroupIndex[groupid] * self.embedding_length:
+			pos = -1
+
 		return pos
 
