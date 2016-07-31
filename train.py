@@ -49,8 +49,8 @@ global context
 #mini-batch样本数
 batchsize = 1000
 ITER_NUM = 20
-PRINT_TIME_BATCH_NUM = 1
-BLOCK_SIZE = 5000
+PRINT_TIME_BATCH_NUM = 100
+BLOCK_SIZE = 100000
 
 #函数定义---------------------------------------------------------------
 #cuda 清除context
@@ -73,7 +73,7 @@ if rank==0:
 	sys.setrecursionlimit(1000000)
 	#初始化，读取训练集
 	readMaxGroup = ReadMaxGroup()
-	res = readMaxGroup.read_max_group("/home/zjp/DataSet/total")
+	res = readMaxGroup.read_max_group("/home/zjp/multigpu/dataset/train")
 	#res = readMaxGroup.read_max_group("/media/new/Data/tangbonew/kaggle_avazu_pCTR_compitition/converted2#_tr_va_te_dataset/valid")
 	pattern_groupid_list = readMaxGroup.pattern_groupid_list
 	print 'res:%d \n'%(res)
@@ -168,9 +168,9 @@ else:
 
 		#----------------读取worker各自的训练集--------------------
 		if rank == 1:
-			train_feature_group_list = Train_feature_group_list("/media/new/Data/train1.5000.bin")
+			train_feature_group_list = Train_feature_group_list("/media/new/Data/train1.dat")
 		else:
-			train_feature_group_list = Train_feature_group_list("/media/new/DATA2/train2.5000.bin")
+			train_feature_group_list = Train_feature_group_list("/media/new/DATA2/train2.dat")
 		train_feature_group_list.input_groupid = 23 ############ this should be general ##############
 		train_feature_group_list.readBlockFile(block_size)
 		trainInstanceNum = train_feature_group_list.count_of_file########### this should be general ############
